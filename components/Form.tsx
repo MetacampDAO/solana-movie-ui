@@ -3,9 +3,12 @@ import { Movie } from '../models/Movie'
 import { useState } from 'react'
 import { Box, Button, FormControl, FormLabel, Input, NumberDecrementStepper, NumberIncrementStepper, NumberInput, NumberInputField, NumberInputStepper, Textarea } from '@chakra-ui/react'
 import * as web3 from '@solana/web3.js'
-import { useConnection, useWallet } from '@solana/wallet-adapter-react'
+import { useAnchorWallet, useConnection, useWallet } from '@solana/wallet-adapter-react'
+import { SolanaMovieProgram } from '../data/solana_movie_program'
+import * as smpIdl from '../data/solana_movie_program.json';
+import * as anchor from "@project-serum/anchor";
 
-const MOVIE_REVIEW_PROGRAM_ID = 'CenYq6bDRB7p73EjsPEpiYN7uveyPUTdXkDkgUduboaN'
+const MOVIE_REVIEW_PROGRAM_ID = '2SogeA4hASCYGTSQqoSqKy8cZ3bnka5N5U9Ewkswkyf5'
 
 export const Form: FC = () => {
     const [title, setTitle] = useState('')
@@ -13,7 +16,7 @@ export const Form: FC = () => {
     const [description, setDescription] = useState('')
 
     const { connection } = useConnection();
-    const { publicKey, sendTransaction } = useWallet();
+    const wallet = useAnchorWallet();
 
     const handleSubmit = (event: any) => {
         event.preventDefault()
@@ -22,47 +25,43 @@ export const Form: FC = () => {
     }
 
     const handleTransactionSubmit = async (movie: Movie) => {
-        if (!publicKey) {
+        if (!wallet?.publicKey) {
             alert('Please connect your wallet!')
             return
         }
 
-        const buffer = movie.serialize()
-        const transaction = new web3.Transaction()
+        const smpClient = new anchor.Program<SolanaMovieProgram>(
+            smpIdl as any,
+            new web3.PublicKey(MOVIE_REVIEW_PROGRAM_ID),
+            new anchor.AnchorProvider(
+                connection,
+                wallet,
+                anchor.AnchorProvider.defaultOptions()
+            )
+        ) 
 
         const [pda] = await web3.PublicKey.findProgramAddress(
-            [publicKey.toBuffer(), Buffer.from(movie.title)],// new TextEncoder().encode(movie.title)],
+            [
+                wallet.publicKey.toBuffer(), 
+                Buffer.from(anchor.utils.bytes.utf8.encode(movie.title))
+            ],
             new web3.PublicKey(MOVIE_REVIEW_PROGRAM_ID)
         )
-
-        const instruction = new web3.TransactionInstruction({
-            keys: [
-                {
-                    pubkey: publicKey,
-                    isSigner: true,
-                    isWritable: false,
-                },
-                {
-                    pubkey: pda,
-                    isSigner: false,
-                    isWritable: true
-                },
-                {
-                    pubkey: web3.SystemProgram.programId,
-                    isSigner: false,
-                    isWritable: false
-                }
-            ],
-            data: buffer,
-            programId: new web3.PublicKey(MOVIE_REVIEW_PROGRAM_ID)
-        })
-
-        transaction.add(instruction)
+        const variant = await connection.getAccountInfo(pda)? 1: 0;
 
         try {
-            let txid = await sendTransaction(transaction, connection)
-            alert(`Transaction submitted: https://explorer.solana.com/tx/${txid}?cluster=devnet`)
-            console.log(`Transaction submitted: https://explorer.solana.com/tx/${txid}?cluster=devnet`)
+            const txSig = await smpClient.methods.addOrUpdateReview(
+                variant,
+                movie.title,
+                movie.rating,
+                movie.description
+            ).accounts({
+                initializer: wallet.publicKey,
+                pdaAccount: pda,
+                systemProgram: web3.SystemProgram.programId
+            }).rpc();
+            alert(`Transaction submitted: https://solana.fm/tx/${txSig}?cluster=devnet-solana`)
+            console.log(`Transaction submitted: https://solana.fm/tx/${txSig}?cluster=devnet-solana`)
         } catch (e) {
             console.log(JSON.stringify(e))
             alert(JSON.stringify(e))
